@@ -1,6 +1,7 @@
 <script>
 import { ref, watch } from 'vue';
 import { useServersStore } from '../stores/servers';
+import { useNotificationsStore } from '../stores/notifications';
 
 export default {
   name: 'EditServerModal',
@@ -17,7 +18,8 @@ export default {
   emits: ['close', 'saved'],
   setup(props, { emit }) {
     const serversStore = useServersStore();
-    
+    const notificationsStore = useNotificationsStore();
+
     const form = ref({
       name: '',
       hostname: '',
@@ -26,49 +28,69 @@ export default {
       location: '',
       os: 'Linux'
     });
-    
+
     const errors = ref({});
     const isSubmitting = ref(false);
-    
-    // Watch for server prop changes to populate form
-    watch(() => props.server, () => {
-      if (props.server) {
-        form.value = props.server;
-      }
-    }, { immediate: true });
-    
-    // Watch for modal visibility to reset errors
-    watch(() => props.isVisible, (isVisible) => {
-      if (isVisible) {
+
+    const resetFormFromProps = () => {
+      const s = props.server ?? {};
+      form.value = {
+        name: s.name ?? '',
+        hostname: s.hostname ?? '',
+        ip_address: s.ip_address ?? '',
+        status: s.status ?? 'online',
+        location: s.location ?? '',
+        os: s.os ?? 'Linux'
+      };
+    };
+
+    // Watch for server prop changes to populate form (only while modal is visible)
+    watch(
+      () => props.server,
+      () => {
+        if (!props.isVisible) return;
+        resetFormFromProps();
+      },
+      { immediate: true }
+    );
+
+    // Watch for modal visibility to reset errors + form
+    watch(
+      () => props.isVisible,
+      (isVisible) => {
+        if (!isVisible) return;
         errors.value = {};
+        serversStore.clearError();
+        resetFormFromProps();
       }
-    });
-    
+    );
+
     const validateForm = () => {
       errors.value = {};
-      
+
       if (!form.value.name.trim()) {
         errors.value.name = 'Server name is required';
       }
-      
+
       if (!form.value.hostname.trim()) {
         errors.value.hostname = 'Hostname is required';
       }
-      
+
       if (!form.value.ip_address.trim()) {
         errors.value.ip_address = 'IP Address is required';
       } else if (!/^(\d{1,3}\.){3}\d{1,3}$/.test(form.value.ip_address)) {
         errors.value.ip_address = 'Invalid IP address format';
       }
-      
+
       return Object.keys(errors.value).length === 0;
     };
-    
+
     const handleSubmit = async () => {
       if (!validateForm()) return;
-      
+
       isSubmitting.value = true;
-      
+      serversStore.clearError();
+
       try {
         const payload = {
           name: form.value.name,
@@ -78,27 +100,43 @@ export default {
           location: form.value.location,
           os: form.value.os
         };
-        
-        await serversStore.updateServer(props.server.id, payload);
+
+        const updated = await serversStore.updateServer(props.server.id, payload);
+
+        notificationsStore.addToast({
+          type: 'success',
+          title: 'Server updated',
+          message: `Updated ${updated?.name || props.server?.name || 'server'}.`
+        });
+
         emit('saved', { ...props.server, ...payload });
         emit('close');
-      } catch (error) {
-        console.error('Failed to update server:', error);
+      } catch (err) {
+        const message = serversStore.error || err?.response?.data?.error || 'Failed to update server';
+
+        notificationsStore.addToast({
+          type: 'error',
+          title: 'Update failed',
+          message
+        });
       } finally {
         isSubmitting.value = false;
       }
     };
-    
+
     const handleCancel = () => {
+      errors.value = {};
+      serversStore.clearError();
+      resetFormFromProps();
       emit('close');
     };
-    
+
     const handleBackdropClick = (event) => {
       if (event.target === event.currentTarget) {
         handleCancel();
       }
     };
-    
+
     return {
       form,
       errors,
@@ -127,6 +165,7 @@ export default {
         <button
           @click="handleCancel"
           class="text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300"
+          :disabled="isSubmitting"
         >
           <svg
             class="w-6 h-6"
@@ -143,7 +182,7 @@ export default {
           </svg>
         </button>
       </div>
-      
+
       <!-- Modal Body -->
       <form
         @submit.prevent="handleSubmit"
@@ -165,6 +204,7 @@ export default {
               required
               class="form-input"
               :class="{ 'border-red-300 dark:border-red-500': errors.name }"
+              :disabled="isSubmitting"
             />
             <p
               v-if="errors.name"
@@ -189,6 +229,7 @@ export default {
               required
               class="form-input"
               :class="{ 'border-red-300 dark:border-red-500': errors.hostname }"
+              :disabled="isSubmitting"
             />
             <p
               v-if="errors.hostname"
@@ -214,6 +255,7 @@ export default {
               placeholder="192.168.1.100"
               class="form-input"
               :class="{ 'border-red-300 dark:border-red-500': errors.ip_address }"
+              :disabled="isSubmitting"
             />
             <p
               v-if="errors.ip_address"
@@ -235,6 +277,7 @@ export default {
               v-model="form.status"
               id="edit-status"
               class="form-input"
+              :disabled="isSubmitting"
             >
               <option value="online">Online</option>
               <option value="offline">Offline</option>
@@ -257,6 +300,7 @@ export default {
               type="text"
               placeholder="US-East"
               class="form-input"
+              :disabled="isSubmitting"
             />
           </div>
 
@@ -274,6 +318,7 @@ export default {
               type="text"
               placeholder="Ubuntu 20.04"
               class="form-input"
+              :disabled="isSubmitting"
             />
           </div>
         </div>
@@ -281,7 +326,8 @@ export default {
         <!-- Error Message -->
         <div
           v-if="serversStore.error"
-          class="mt-4 text-red-600 dark:text-red-400 text-sm"
+          class="mt-4 bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-400 px-4 py-3 rounded text-sm"
+          role="alert"
         >
           {{ serversStore.error }}
         </div>
@@ -292,6 +338,7 @@ export default {
             type="button"
             @click="handleCancel"
             class="btn btn-secondary"
+            :disabled="isSubmitting"
           >
             Cancel
           </button>
