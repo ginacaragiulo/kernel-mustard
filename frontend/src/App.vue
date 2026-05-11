@@ -3,11 +3,13 @@ import { RouterView } from 'vue-router';
 import { useAuthStore } from './stores/auth';
 import { useRouter } from 'vue-router';
 import { onMounted } from 'vue';
+import ToastViewport from './components/ToastViewport.vue';
 
 export default {
   name: 'App',
   components: {
-    RouterView
+    RouterView,
+    ToastViewport
   },
   setup() {
     const authStore = useAuthStore();
@@ -174,5 +176,7 @@ export default {
     >
       <RouterView />
     </div>
+
+    <ToastViewport />
   </div>
 </template>

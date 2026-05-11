@@ -2,6 +2,7 @@
 import { ref, onMounted, computed } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useServersStore } from '../stores/servers';
+import { useNotificationsStore } from '../stores/notifications';
 
 export default {
   name: 'ServerFormView',
@@ -9,6 +10,7 @@ export default {
     const route = useRoute();
     const router = useRouter();
     const serversStore = useServersStore();
+    const notificationsStore = useNotificationsStore();
 
     const isEdit = computed(() => !!route.params.id);
     const serverId = computed(() => parseInt(route.params.id));
@@ -27,29 +29,30 @@ export default {
 
     const validateForm = () => {
       errors.value = {};
-      
+
       if (!form.value.name.trim()) {
         errors.value.name = 'Server name is required';
       }
-      
+
       if (!form.value.hostname.trim()) {
         errors.value.hostname = 'Hostname is required';
       }
-      
+
       if (!form.value.ip_address.trim()) {
         errors.value.ip_address = 'IP Address is required';
       } else if (!/^(\d{1,3}\.){3}\d{1,3}$/.test(form.value.ip_address)) {
         errors.value.ip_address = 'Invalid IP address format';
       }
-      
+
       return Object.keys(errors.value).length === 0;
     };
 
     const submitForm = async () => {
       if (!validateForm()) return;
-      
+
       isSubmitting.value = true;
-      
+      serversStore.clearError();
+
       try {
         const payload = {
           name: form.value.name,
@@ -57,17 +60,34 @@ export default {
           ip_address: form.value.ip_address,
           status: form.value.status,
           location: form.value.location,
-          os: form.value.os,
+          os: form.value.os
         };
 
         if (isEdit.value) {
           await serversStore.updateServer(serverId.value, payload);
+          notificationsStore.addToast({
+            type: 'success',
+            title: 'Server updated',
+            message: `Updated ${payload.name}.`
+          });
         } else {
           await serversStore.createServer(payload);
+          notificationsStore.addToast({
+            type: 'success',
+            title: 'Server created',
+            message: `Created ${payload.name}.`
+          });
         }
+
         router.push('/servers');
-      } catch (error) {
-        console.error('Failed to save server:', error);
+      } catch (err) {
+        const message = serversStore.error || err?.response?.data?.error || 'Failed to save server';
+
+        notificationsStore.addToast({
+          type: 'error',
+          title: 'Save failed',
+          message
+        });
       } finally {
         isSubmitting.value = false;
       }
@@ -77,34 +97,53 @@ export default {
       router.push('/servers');
     };
 
-    onMounted(() => {
-      if (isEdit.value) {
-        const server = serversStore.getServerById(serverId.value);
-        if (server) {
-          Object.assign(form.value, {
-            name: server.name,
-            hostname: server.hostname,
-            ip_address: server.ip_address,
-            status: server.status,
-            location: server.location,
-            os: server.os
+    const hydrateFormFromServer = (server) => {
+      if (!server) return;
+
+      Object.assign(form.value, {
+        name: server.name,
+        hostname: server.hostname,
+        ip_address: server.ip_address,
+        status: server.status,
+        location: server.location,
+        os: server.os
+      });
+    };
+
+    onMounted(async () => {
+      serversStore.clearError();
+
+      if (!isEdit.value) return;
+
+      const existing = serversStore.getServerById(serverId.value);
+      if (existing) {
+        hydrateFormFromServer(existing);
+        return;
+      }
+
+      try {
+        await serversStore.fetchServers();
+        const afterFetch = serversStore.getServerById(serverId.value);
+        if (!afterFetch) {
+          notificationsStore.addToast({
+            type: 'error',
+            title: 'Server not found',
+            message: 'The server you’re trying to edit no longer exists.'
           });
-        } else {
-          // If server not found in store, fetch servers first
-          serversStore.fetchServers().then(() => {
-            const server = serversStore.getServerById(serverId.value);
-            if (server) {
-              Object.assign(form.value, {
-                name: server.name,
-                hostname: server.hostname,
-                ip_address: server.ip_address,
-                status: server.status,
-                location: server.location,
-                os: server.os
-              });
-            }
-          });
+          router.push('/servers');
+          return;
         }
+        hydrateFormFromServer(afterFetch);
+      } catch (err) {
+        const message = serversStore.error || err?.response?.data?.error || 'Failed to load server data';
+
+        notificationsStore.addToast({
+          type: 'error',
+          title: 'Load failed',
+          message
+        });
+
+        router.push('/servers');
       }
     });
 
@@ -113,7 +152,6 @@ export default {
       form,
       errors,
       isSubmitting,
-      serversStore,
       submitForm,
       cancel
     };
@@ -138,7 +176,7 @@ export default {
     >
       <div class="card p-6">
         <h3 class="text-lg font-medium text-gray-900 dark:text-gray-100 mb-4">Basic Information</h3>
-        
+
         <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
           <div>
             <label
@@ -263,19 +301,12 @@ export default {
         </div>
       </div>
 
-
-      <div
-        v-if="serversStore.error"
-        class="text-red-600 dark:text-red-400 text-sm"
-      >
-        {{ serversStore.error }}
-      </div>
-
       <div class="flex justify-end space-x-4">
         <button
           type="button"
           @click="cancel"
           class="btn btn-secondary"
+          :disabled="isSubmitting"
         >
           Cancel
         </button>
